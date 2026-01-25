@@ -16,24 +16,12 @@ jobs:
   build-mac:
     runs-on: macos-latest
     steps:
-      - name: Debug payload
-        run: |
-          echo "Version: ${{ github.event.client_payload.version }}"
-          echo "Ref: ${{ github.event.client_payload.ref }}"
-          echo "Prerelease: ${{ github.event.client_payload.prerelease }}"
-
       - name: Checkout private repository
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           ref: ${{ github.event.client_payload.version }}
-
-      - name: Verify checkout
-        run: |
-          echo "Current directory: $(pwd)"
-          ls -la
-          cat package.json | head -10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -103,45 +91,8 @@ jobs:
             dist/*.exe
           retention-days: 1
 
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout private repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PRIVATE_REPO }}
-          token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: ${{ github.event.client_payload.version }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build for Linux
-        run: pnpm build:linux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-builds
-          path: |
-            dist/*.AppImage
-            dist/*.deb
-          retention-days: 1
-
   release:
-    needs: [build-mac, build-windows, build-linux]
+    needs: [build-mac, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -165,6 +116,5 @@ jobs:
           files: |
             artifacts/mac-builds/*
             artifacts/windows-builds/*
-            artifacts/linux-builds/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
