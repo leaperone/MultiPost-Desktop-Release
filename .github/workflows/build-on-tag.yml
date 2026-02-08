@@ -1,7 +1,4 @@
-name: Build on Tag (Private Repo)
-
-# This workflow is triggered when a tag is pushed to the private repository
-# It uses repository_dispatch event, which can be triggered via GitHub API
+name: Build on Tag
 
 on:
   repository_dispatch:
@@ -13,16 +10,12 @@ env:
   PNPM_VERSION: '9'
 
 jobs:
-  # 先创建 Draft Release，后续构建会直接发布到这个 Release
   create-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      release_id: ${{ steps.create.outputs.id }}
     steps:
       - name: Create Draft Release
-        id: create
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.client_payload.version }}
@@ -36,6 +29,7 @@ jobs:
   build-mac:
     needs: create-release
     runs-on: macos-latest
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -56,24 +50,49 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
 
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # electron-builder 直接发布到 GitHub Release
-      # 会自动生成 latest-mac.yml 文件
-      - name: Build and Publish macOS (x64)
-        run: pnpm build:mac -- --x64 --publish always
+      - uses: nick-fields/retry@v2
+        name: Build, sign, notarize and publish macOS
+        with:
+          timeout_minutes: 30
+          max_attempts: 2
+          command: pnpm build:mac -- --x64 --arm64 --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Build and Publish macOS (arm64)
-        run: pnpm build:mac -- --arm64 --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload macOS artifacts for S3
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-builds
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/latest-mac.yml
+            dist/*.blockmap
+          retention-days: 1
 
   build-windows:
     needs: create-release
     runs-on: windows-latest
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -94,19 +113,120 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
 
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # electron-builder 直接发布到 GitHub Release
-      # 会自动生成 latest.yml 文件
-      - name: Build and Publish Windows
+      - name: Build and publish Windows
         run: pnpm build:win -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 所有构建完成后，将 Draft Release 发布为正式版
+      - name: Upload Windows artifacts for S3
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-builds
+          path: |
+            dist/*.exe
+            dist/latest.yml
+            dist/*.blockmap
+          retention-days: 1
+
+  build-linux:
+    needs: create-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ github.event.client_payload.version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and publish Linux
+        run: pnpm build:linux -- --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Linux artifacts for S3
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-builds
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.snap
+            dist/latest-linux.yml
+            dist/*.blockmap
+          retention-days: 1
+
+  upload-to-s3:
+    needs: [build-mac, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Upload to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
+        run: |
+          S3_BUCKET="2someone-web-static"
+          S3_PATH="release/multipost-desktop"
+          S3_ENDPOINT="https://s3.bitiful.net"
+          S3_OPTS="--endpoint-url $S3_ENDPOINT --acl public-read --no-verify-ssl"
+
+          find artifacts -type f | while read file; do
+            filename=$(basename "$file")
+            echo "Uploading: $filename"
+            aws s3 cp "$file" "s3://$S3_BUCKET/$S3_PATH/$filename" $S3_OPTS
+          done
+
   publish-release:
-    needs: [build-mac, build-windows]
+    needs: upload-to-s3
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -120,7 +240,9 @@ jobs:
               repo: context.repo.repo,
             });
 
-            const draftRelease = releases.find(r => r.tag_name === '${{ github.event.client_payload.version }}' && r.draft);
+            const draftRelease = releases.find(r =>
+              r.tag_name === '${{ github.event.client_payload.version }}' && r.draft
+            );
 
             if (draftRelease) {
               await github.rest.repos.updateRelease({

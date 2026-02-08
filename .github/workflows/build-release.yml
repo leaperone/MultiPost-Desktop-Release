@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build and Release (Manual)
 
 on:
   workflow_dispatch:
@@ -21,13 +21,14 @@ env:
 jobs:
   build-mac:
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout private repository
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: main
+          ref: ${{ inputs.version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -41,29 +42,30 @@ jobs:
 
       - name: Get pnpm store directory
         shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: Setup pnpm cache
         uses: actions/cache@v4
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          restore-keys: ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build for macOS (x64)
-        run: pnpm build:mac -- --x64
+      - uses: nick-fields/retry@v2
+        name: Build, sign, notarize macOS
+        with:
+          timeout_minutes: 30
+          max_attempts: 2
+          command: pnpm build:mac -- --x64 --arm64
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build for macOS (arm64)
-        run: pnpm build:mac -- --arm64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -72,17 +74,20 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+            dist/latest-mac.yml
+            dist/*.blockmap
           retention-days: 1
 
   build-windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout private repository
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: main
+          ref: ${{ inputs.version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -96,21 +101,19 @@ jobs:
 
       - name: Get pnpm store directory
         shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: Setup pnpm cache
         uses: actions/cache@v4
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          restore-keys: ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build for Windows
+      - name: Build Windows
         run: pnpm build:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -121,17 +124,20 @@ jobs:
           name: windows-builds
           path: |
             dist/*.exe
+            dist/latest.yml
+            dist/*.blockmap
           retention-days: 1
 
   build-linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout private repository
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: main
+          ref: ${{ inputs.version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -145,21 +151,19 @@ jobs:
 
       - name: Get pnpm store directory
         shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: Setup pnpm cache
         uses: actions/cache@v4
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          restore-keys: ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build for Linux
+      - name: Build Linux
         run: pnpm build:linux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -172,6 +176,8 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.snap
+            dist/latest-linux.yml
+            dist/*.blockmap
           retention-days: 1
 
   release:
@@ -188,6 +194,22 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
+      - name: Upload to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
+        run: |
+          S3_BUCKET="2someone-web-static"
+          S3_PATH="release/multipost-desktop"
+          S3_ENDPOINT="https://s3.bitiful.net"
+          S3_OPTS="--endpoint-url $S3_ENDPOINT --acl public-read --no-verify-ssl"
+
+          find artifacts -type f | while read file; do
+            filename=$(basename "$file")
+            echo "Uploading: $filename"
+            aws s3 cp "$file" "s3://$S3_BUCKET/$S3_PATH/$filename" $S3_OPTS
+          done
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -197,8 +219,11 @@ jobs:
           prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
           files: |
-            artifacts/mac-builds/*
-            artifacts/windows-builds/*
-            artifacts/linux-builds/*
+            artifacts/mac-builds/*.dmg
+            artifacts/mac-builds/*.zip
+            artifacts/windows-builds/*.exe
+            artifacts/linux-builds/*.AppImage
+            artifacts/linux-builds/*.deb
+            artifacts/linux-builds/*.snap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
