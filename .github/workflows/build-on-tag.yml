@@ -213,17 +213,85 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
+          S3_BUCKET: 2someone-web-static
+          S3_PATH: release/multipost-desktop
+          VERSION: ${{ github.event.client_payload.version }}
         run: |
-          S3_BUCKET="2someone-web-static"
-          S3_PATH="release/multipost-desktop"
           S3_ENDPOINT="https://s3.bitiful.net"
           S3_OPTS="--endpoint-url $S3_ENDPOINT --acl public-read --no-verify-ssl"
 
-          find artifacts -type f | while read file; do
+          # Upload versioned files + yml manifests + blockmaps
+          find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.snap" -o -name "latest*.yml" -o -name "*.blockmap" \) | while read file; do
             filename=$(basename "$file")
-            echo "Uploading: $filename"
+            echo "Uploading $filename..."
             aws s3 cp "$file" "s3://$S3_BUCKET/$S3_PATH/$filename" $S3_OPTS
           done
+
+          # Create latest alias files (fixed download links)
+          echo "Creating latest alias files..."
+
+          MAC_DMG=$(find artifacts -name "*.dmg" | head -1)
+          [ -n "$MAC_DMG" ] && aws s3 cp "$MAC_DMG" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.dmg" $S3_OPTS
+
+          MAC_ZIP=$(find artifacts -name "*-mac.zip" | head -1)
+          [ -n "$MAC_ZIP" ] && aws s3 cp "$MAC_ZIP" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.zip" $S3_OPTS
+
+          WIN_EXE=$(find artifacts -name "*.exe" | head -1)
+          [ -n "$WIN_EXE" ] && aws s3 cp "$WIN_EXE" "s3://$S3_BUCKET/$S3_PATH/MultiPost-Setup-latest.exe" $S3_OPTS
+
+          LINUX_APPIMAGE=$(find artifacts -name "*.AppImage" | head -1)
+          [ -n "$LINUX_APPIMAGE" ] && aws s3 cp "$LINUX_APPIMAGE" "s3://$S3_BUCKET/$S3_PATH/MultiPost-latest.AppImage" $S3_OPTS
+
+          LINUX_DEB=$(find artifacts -name "*.deb" | head -1)
+          [ -n "$LINUX_DEB" ] && aws s3 cp "$LINUX_DEB" "s3://$S3_BUCKET/$S3_PATH/MultiPost-latest.deb" $S3_OPTS
+
+      - name: Cleanup old versions on S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
+          S3_BUCKET: 2someone-web-static
+          S3_PATH: release/multipost-desktop
+          VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          # S3 only keeps: current version + latest aliases + yml manifests
+          # Historical versions are preserved on GitHub Releases
+          S3_ENDPOINT="https://s3.bitiful.net"
+          S3_OPTS="--endpoint-url $S3_ENDPOINT --no-verify-ssl"
+          VER="${VERSION#v}"
+
+          aws s3 ls "s3://$S3_BUCKET/$S3_PATH/" $S3_OPTS 2>/dev/null \
+            | sed 's/^[0-9-]* [0-9:]* *[0-9]* //' \
+            | grep -v '^$' > /tmp/s3_all.txt
+
+          echo "Total files on S3: $(wc -l < /tmp/s3_all.txt)"
+          echo "Current version: ${VER}"
+
+          > /tmp/s3_delete.txt
+          while IFS= read -r fname; do
+            [ -z "$fname" ] && continue
+            keep=false
+            case "$fname" in *"${VER}"*) keep=true ;; esac
+            case "$fname" in
+              latest-mac.yml|latest.yml|latest-linux.yml) keep=true ;;
+              MultiPost-mac-latest.*) keep=true ;;
+              MultiPost-Setup-latest.*) keep=true ;;
+              MultiPost-latest.*) keep=true ;;
+            esac
+            [ "$keep" = "false" ] && echo "$fname" >> /tmp/s3_delete.txt
+          done < /tmp/s3_all.txt
+
+          if [ ! -s /tmp/s3_delete.txt ]; then
+            echo "Nothing to delete."
+            exit 0
+          fi
+
+          echo "=== Deleting $(wc -l < /tmp/s3_delete.txt) old files ==="
+          while IFS= read -r fname; do
+            [ -z "$fname" ] && continue
+            echo "  rm: $fname"
+            aws s3 rm "s3://$S3_BUCKET/$S3_PATH/$fname" $S3_OPTS 2>/dev/null
+          done < /tmp/s3_delete.txt
+          echo "Cleanup complete"
 
   publish-release:
     needs: upload-to-s3
