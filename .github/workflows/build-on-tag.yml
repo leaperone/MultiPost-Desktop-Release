@@ -5,9 +5,9 @@ on:
     types: [release-build]
 
 env:
-  PRIVATE_REPO: leaperone/MultiPost-Desktop
+  PRIVATE_REPO: leaperone/MultiPost
   NODE_VERSION: '20'
-  PNPM_VERSION: '9'
+  PNPM_VERSION: '10'
 
 jobs:
   create-release:
@@ -33,12 +33,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout private repository
+      - name: Checkout monorepo
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: ${{ github.event.client_payload.version }}
+          ref: desktop-${{ github.event.client_payload.version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -69,7 +69,7 @@ jobs:
         with:
           timeout_minutes: 30
           max_attempts: 2
-          command: pnpm build:mac -- --x64 --arm64 --publish always
+          command: cd apps/desktop && pnpm build:mac -- --x64 --arm64 --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -83,10 +83,10 @@ jobs:
         with:
           name: mac-builds
           path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/latest-mac.yml
-            dist/*.blockmap
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/latest-mac.yml
+            apps/desktop/dist/*.blockmap
           retention-days: 1
 
   build-windows:
@@ -96,12 +96,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout private repository
+      - name: Checkout monorepo
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: ${{ github.event.client_payload.version }}
+          ref: desktop-${{ github.event.client_payload.version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -129,6 +129,7 @@ jobs:
 
       - name: Build and publish Windows
         run: pnpm build:win -- --publish always
+        working-directory: apps/desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -137,9 +138,9 @@ jobs:
         with:
           name: windows-builds
           path: |
-            dist/*.exe
-            dist/latest.yml
-            dist/*.blockmap
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/latest.yml
+            apps/desktop/dist/*.blockmap
           retention-days: 1
 
   build-linux:
@@ -149,12 +150,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout private repository
+      - name: Checkout monorepo
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: ${{ github.event.client_payload.version }}
+          ref: desktop-${{ github.event.client_payload.version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -182,6 +183,7 @@ jobs:
 
       - name: Build and publish Linux
         run: pnpm build:linux -- --publish always
+        working-directory: apps/desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -190,11 +192,11 @@ jobs:
         with:
           name: linux-builds
           path: |
-            dist/*.AppImage
-            dist/*.deb
-            dist/*.snap
-            dist/latest-linux.yml
-            dist/*.blockmap
+            apps/desktop/dist/*.AppImage
+            apps/desktop/dist/*.deb
+            apps/desktop/dist/*.snap
+            apps/desktop/dist/latest-linux.yml
+            apps/desktop/dist/*.blockmap
           retention-days: 1
 
   upload-to-s3:
