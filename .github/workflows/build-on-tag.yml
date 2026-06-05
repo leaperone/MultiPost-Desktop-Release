@@ -38,6 +38,7 @@ jobs:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           ref: desktop-${{ github.event.client_payload.version }}
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -99,6 +100,7 @@ jobs:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           ref: desktop-${{ github.event.client_payload.version }}
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -151,6 +153,7 @@ jobs:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           ref: desktop-${{ github.event.client_payload.version }}
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
