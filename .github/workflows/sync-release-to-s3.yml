@@ -1,0 +1,63 @@
+name: Sync Release to S3
+
+# Manual recovery tool: re-mirror an already-built GitHub Release's assets to
+# the S4 CDN in parallel, without rebuilding. Use when build-on-tag's
+# upload-to-s3 step was cancelled/timed out and left S4 files missing or stale.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag to sync (e.g. v0.3.0)'
+        required: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets from GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          gh release download "${{ github.event.inputs.version }}" \
+            -R ${{ github.repository }} -D artifacts --clobber
+          echo "=== downloaded ==="
+          ls -la artifacts
+
+      - name: Upload to S3 (parallel)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
+          S3_BUCKET: 2someone-web-static
+          S3_PATH: release/multipost-desktop
+        run: |
+          S3_ENDPOINT="https://s3.bitiful.net"
+          export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY S3_BUCKET S3_PATH S3_ENDPOINT
+
+          # Build the upload manifest as "<src-path>|<dest-key>" lines.
+          # Versioned files keep their basename; the fixed "*-latest.*" download
+          # aliases point at the matching artifact.
+          {
+            find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.snap" -o -name "latest*.yml" -o -name "*.blockmap" \) \
+              | while read -r f; do echo "$f|$(basename "$f")"; done
+
+            for spec in "*.dmg|MultiPost-mac-latest.dmg" "*-mac.zip|MultiPost-mac-latest.zip" "*.exe|MultiPost-Setup-latest.exe" "*.AppImage|MultiPost-latest.AppImage" "*.deb|MultiPost-latest.deb"; do
+              src=$(find artifacts -name "${spec%%|*}" | head -1)
+              [ -n "$src" ] && echo "$src|${spec##*|}"
+            done
+          } > /tmp/uploads.txt
+
+          echo "=== Uploading $(wc -l < /tmp/uploads.txt) objects to S3 (parallel, 6 at a time) ==="
+          cat /tmp/uploads.txt
+
+          # Parallel upload. xargs exits non-zero if any cp fails, which fails the
+          # step under the default `set -eo pipefail`.
+          xargs -a /tmp/uploads.txt -P 6 -d '\n' -I {} bash -c '
+            spec="$1"; src="${spec%%|*}"; dst="${spec##*|}"
+            echo "Uploading $dst ..."
+            aws s3 cp "$src" "s3://$S3_BUCKET/$S3_PATH/$dst" \
+              --endpoint-url "$S3_ENDPOINT" --acl public-read --no-verify-ssl
+          ' _ {}
+
+          echo "All uploads complete."
