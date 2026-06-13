@@ -216,32 +216,36 @@ jobs:
           VERSION: ${{ github.event.client_payload.version }}
         run: |
           S3_ENDPOINT="https://s3.bitiful.net"
-          S3_OPTS="--endpoint-url $S3_ENDPOINT --acl public-read --no-verify-ssl"
+          export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY S3_BUCKET S3_PATH S3_ENDPOINT
 
-          # Upload versioned files + yml manifests + blockmaps
-          find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.snap" -o -name "latest*.yml" -o -name "*.blockmap" \) | while read file; do
-            filename=$(basename "$file")
-            echo "Uploading $filename..."
-            aws s3 cp "$file" "s3://$S3_BUCKET/$S3_PATH/$filename" $S3_OPTS
-          done
+          # Build the upload manifest as "<src-path>|<dest-key>" lines.
+          # Versioned files (dmg/zip/exe/AppImage/deb/snap), yml manifests and
+          # blockmaps keep their basename; the fixed "*-latest.*" download
+          # aliases point at the matching artifact.
+          {
+            find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.snap" -o -name "latest*.yml" -o -name "*.blockmap" \) \
+              | while read -r f; do echo "$f|$(basename "$f")"; done
 
-          # Create latest alias files (fixed download links)
-          echo "Creating latest alias files..."
+            for spec in "*.dmg|MultiPost-mac-latest.dmg" "*-mac.zip|MultiPost-mac-latest.zip" "*.exe|MultiPost-Setup-latest.exe" "*.AppImage|MultiPost-latest.AppImage" "*.deb|MultiPost-latest.deb"; do
+              src=$(find artifacts -name "${spec%%|*}" | head -1)
+              [ -n "$src" ] && echo "$src|${spec##*|}"
+            done
+          } > /tmp/uploads.txt
 
-          MAC_DMG=$(find artifacts -name "*.dmg" | head -1)
-          [ -n "$MAC_DMG" ] && aws s3 cp "$MAC_DMG" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.dmg" $S3_OPTS
+          echo "=== Uploading $(wc -l < /tmp/uploads.txt) objects to S3 (parallel, 6 at a time) ==="
+          cat /tmp/uploads.txt
 
-          MAC_ZIP=$(find artifacts -name "*-mac.zip" | head -1)
-          [ -n "$MAC_ZIP" ] && aws s3 cp "$MAC_ZIP" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.zip" $S3_OPTS
+          # Parallel upload. xargs exits non-zero if any cp fails, which fails the
+          # step under the default `set -eo pipefail` — keeps fail-fast behaviour
+          # while avoiding the old "one slow file blocks the queue" serial hang.
+          xargs -a /tmp/uploads.txt -P 6 -d '\n' -I {} bash -c '
+            spec="$1"; src="${spec%%|*}"; dst="${spec##*|}"
+            echo "Uploading $dst ..."
+            aws s3 cp "$src" "s3://$S3_BUCKET/$S3_PATH/$dst" \
+              --endpoint-url "$S3_ENDPOINT" --acl public-read --no-verify-ssl
+          ' _ {}
 
-          WIN_EXE=$(find artifacts -name "*.exe" | head -1)
-          [ -n "$WIN_EXE" ] && aws s3 cp "$WIN_EXE" "s3://$S3_BUCKET/$S3_PATH/MultiPost-Setup-latest.exe" $S3_OPTS
-
-          LINUX_APPIMAGE=$(find artifacts -name "*.AppImage" | head -1)
-          [ -n "$LINUX_APPIMAGE" ] && aws s3 cp "$LINUX_APPIMAGE" "s3://$S3_BUCKET/$S3_PATH/MultiPost-latest.AppImage" $S3_OPTS
-
-          LINUX_DEB=$(find artifacts -name "*.deb" | head -1)
-          [ -n "$LINUX_DEB" ] && aws s3 cp "$LINUX_DEB" "s3://$S3_BUCKET/$S3_PATH/MultiPost-latest.deb" $S3_OPTS
+          echo "All uploads complete."
 
       - name: Cleanup old versions on S3
         env:
