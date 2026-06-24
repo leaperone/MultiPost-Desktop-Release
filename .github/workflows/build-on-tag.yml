@@ -295,6 +295,50 @@ jobs:
           done < /tmp/s3_delete.txt
           echo "Cleanup complete"
 
+  refresh-cdn:
+    needs: upload-to-s3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refresh S4 CDN cache for update manifests
+        env:
+          BITIFUL_API_TOKEN: ${{ secrets.BITIFUL_API_TOKEN }}
+          VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          set -eo pipefail
+          if [ -z "$BITIFUL_API_TOKEN" ]; then
+            echo "::error::BITIFUL_API_TOKEN secret is not set — cannot refresh CDN cache."
+            echo "Set it once: gh secret set BITIFUL_API_TOKEN --org leaperone --visibility all"
+            exit 1
+          fi
+
+          CDN_BASE="https://static.2some.ren/release/multipost-desktop"
+
+          # latest*.yml manifests and the fixed "*-latest.*" download aliases keep
+          # stable filenames, so the S4 CDN serves them with a long (30d) TTL —
+          # clients keep seeing the previous release until the edge entry expires.
+          # A directory purge invalidates every object under the prefix at once,
+          # so the new manifests/aliases are served right after a release instead
+          # of waiting up to 30 days for the stale edge entry to expire.
+          echo "Purging CDN cache for $CDN_BASE/ ..."
+          http=$(curl -s -o /tmp/refresh_resp.txt -w '%{http_code}' \
+            -X POST "https://api.bitiful.com/cdn/cache/refresh" \
+            -H "Authorization: $BITIFUL_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"type\":\"directory\",\"url_list\":[\"$CDN_BASE/\"]}")
+          echo "Refresh API HTTP $http: $(cat /tmp/refresh_resp.txt)"
+          [ "$http" = "200" ] || { echo "::error::CDN cache refresh failed"; exit 1; }
+
+          # Edge propagation is async (30s–5min); poll as a best-effort check and
+          # surface the served version without failing the job on a stale read.
+          VER="${VERSION#v}"
+          echo "Expecting version: $VER"
+          sleep 30
+          for f in latest-mac.yml latest.yml latest-linux.yml; do
+            got=$(curl -s "$CDN_BASE/$f" | grep -E '^version:' | awk '{print $2}' || true)
+            echo "  $f -> ${got:-<none>}"
+          done
+          echo "CDN refresh requested; edges fully propagate within a few minutes."
+
   publish-release:
     needs: upload-to-s3
     runs-on: ubuntu-latest
