@@ -180,7 +180,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build and publish Linux
-        run: pnpm build:linux --publish always
+        # Publish GitHub drafts; Snap packages are distributed through S3 below.
+        run: pnpm build:linux --publish onTagOrDraft
         working-directory: apps/desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
