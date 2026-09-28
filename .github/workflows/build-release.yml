@@ -215,11 +215,33 @@ jobs:
           # Create latest alias files (fixed download links)
           echo "Creating latest alias files..."
 
-          MAC_DMG=$(find artifacts -name "*.dmg" | head -1)
-          [ -n "$MAC_DMG" ] && aws s3 cp "$MAC_DMG" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.dmg" $S3_OPTS
+          resolve_mac_artifact() {
+            local pattern="$1" exclude="${2:-}"
+            local map count
+            if [ -n "$exclude" ]; then
+              map=$(find artifacts -name "$pattern" ! -name "$exclude")
+            else
+              map=$(find artifacts -name "$pattern")
+            fi
+            count=$(printf '%s\n' "$map" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$count" -ne 1 ]; then
+              echo "::error::Expected exactly one match for pattern=$pattern${exclude:+, exclude=$exclude}, got $count" >&2
+              exit 1
+            fi
+            printf '%s' "$map"
+          }
 
-          MAC_ZIP=$(find artifacts -name "*-mac.zip" | head -1)
-          [ -n "$MAC_ZIP" ] && aws s3 cp "$MAC_ZIP" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.zip" $S3_OPTS
+          MAC_ARM_DMG=$(resolve_mac_artifact "*arm64*.dmg")
+          aws s3 cp "$MAC_ARM_DMG" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.dmg" $S3_OPTS
+
+          MAC_ARM_ZIP=$(resolve_mac_artifact "*arm64-mac.zip")
+          aws s3 cp "$MAC_ARM_ZIP" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.zip" $S3_OPTS
+
+          MAC_X64_DMG=$(resolve_mac_artifact "*x64*.dmg")
+          aws s3 cp "$MAC_X64_DMG" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-x64-latest.dmg" $S3_OPTS
+
+          MAC_X64_ZIP=$(resolve_mac_artifact "*-mac.zip" "*arm64-mac.zip")
+          aws s3 cp "$MAC_X64_ZIP" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-x64-latest.zip" $S3_OPTS
 
           WIN_EXE=$(find artifacts -name "*.exe" | head -1)
           [ -n "$WIN_EXE" ] && aws s3 cp "$WIN_EXE" "s3://$S3_BUCKET/$S3_PATH/MultiPost-Setup-latest.exe" $S3_OPTS
@@ -257,6 +279,7 @@ jobs:
             case "$fname" in
               latest-mac.yml|latest.yml|latest-linux.yml) keep=true ;;
               MultiPost-mac-latest.*) keep=true ;;
+              MultiPost-mac-x64-latest.*) keep=true ;;
               MultiPost-Setup-latest.*) keep=true ;;
               MultiPost-latest.*) keep=true ;;
             esac
