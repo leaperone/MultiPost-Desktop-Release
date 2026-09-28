@@ -42,7 +42,29 @@ jobs:
             find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.snap" -o -name "latest*.yml" -o -name "*.blockmap" \) \
               | while read -r f; do echo "$f|$(basename "$f")"; done
 
-            for spec in "*.dmg|MultiPost-mac-latest.dmg" "*-mac.zip|MultiPost-mac-latest.zip" "*.exe|MultiPost-Setup-latest.exe" "*.AppImage|MultiPost-latest.AppImage" "*.deb|MultiPost-latest.deb"; do
+            append_mac_alias() {
+              local pattern="$1" dest="$2" exclude="${3:-}"
+              local map
+              if [ -n "$exclude" ]; then
+                map=$(find artifacts -name "$pattern" ! -name "$exclude")
+              else
+                map=$(find artifacts -name "$pattern")
+              fi
+              local count
+              count=$(printf '%s\n' "$map" | sed '/^$/d' | wc -l | tr -d ' ')
+              if [ "$count" -ne 1 ]; then
+                echo "::error::Expected exactly one match for $dest (pattern=$pattern${exclude:+, exclude=$exclude}), got $count" >&2
+                exit 1
+              fi
+              echo "$map|$dest"
+            }
+
+            append_mac_alias "*arm64*.dmg" "MultiPost-mac-latest.dmg"
+            append_mac_alias "*arm64-mac.zip" "MultiPost-mac-latest.zip"
+            append_mac_alias "*x64*.dmg" "MultiPost-mac-x64-latest.dmg"
+            append_mac_alias "*-mac.zip" "MultiPost-mac-x64-latest.zip" "*arm64-mac.zip"
+
+            for spec in "*.exe|MultiPost-Setup-latest.exe" "*.AppImage|MultiPost-latest.AppImage" "*.deb|MultiPost-latest.deb"; do
               src=$(find artifacts -name "${spec%%|*}" | head -1)
               [ -n "$src" ] && echo "$src|${spec##*|}"
             done
