@@ -48,6 +48,11 @@ jobs:
       - run: pnpm --filter multipost-desktop test:publish-selection
       - run: pnpm --filter multipost-desktop test:publish-lifecycle
       - run: pnpm --filter multipost-desktop test:publish-store-renderer
+      - run: pnpm --filter multipost-desktop typecheck:agent
+      - run: pnpm --filter multipost-desktop test:agent
+      - run: pnpm --filter multipost-desktop test:agent-bundles
+      - run: pnpm --filter multipost-desktop test:desktop-agent-site
+      - run: pnpm --filter multipost-desktop test:agent-ui
       - run: pnpm extension:test:hybrid
       - run: pnpm --filter multipost-desktop test:update-channel
       - run: pnpm --filter multipost-desktop test:release-contract
