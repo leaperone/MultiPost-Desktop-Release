@@ -345,7 +345,8 @@ jobs:
           S3_ENDPOINT="https://s3.bitiful.net"
           export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY S3_BUCKET S3_PATH S3_ENDPOINT
           python3 scripts/plan_s3_upload.py > /tmp/uploads.txt
-          echo "=== Uploading $(wc -l < /tmp/uploads.txt) objects (parallel, 6) ==="
+          aws configure set default.s3.max_concurrent_requests 2
+          echo "Uploading $(wc -l < /tmp/uploads.txt) objects with 2 parallel transfers and retries"
           bash scripts/upload_in_order.sh /tmp/uploads.txt
 
   refresh-cdn:
