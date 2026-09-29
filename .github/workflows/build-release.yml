@@ -1,318 +1,48 @@
 name: Build and Release (Manual)
 
+# Manual entry defaults to nightly; delegates to the same channel-aware core as
+# repository_dispatch. Run only with an authorized source SHA and desktop tag.
+
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: release or nightly
+        required: true
+        type: choice
+        options:
+          - nightly
+          - release
+        default: nightly
       version:
-        description: 'Version tag (e.g., v1.0.0)'
+        description: Release tag (vX.Y.Z or vX.Y.Z-nightly.YYYYMMDD.N)
         required: true
         type: string
-      prerelease:
-        description: 'Mark as pre-release'
-        required: false
-        type: boolean
-        default: false
+      source_sha:
+        description: Full 40-char commit SHA for refs/tags/desktop-<version>
+        required: true
+        type: string
 
-env:
-  PRIVATE_REPO: leaperone/MultiPost-Desktop
-  NODE_VERSION: '20'
-  PNPM_VERSION: '9'
+permissions:
+  contents: write
 
 jobs:
-  build-mac:
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout private repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PRIVATE_REPO }}
-          token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: ${{ inputs.version }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: Get pnpm store directory
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-pnpm-store-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - uses: nick-fields/retry@v2
-        name: Build, sign, notarize macOS
-        with:
-          timeout_minutes: 30
-          max_attempts: 2
-          command: pnpm build:mac -- --x64 --arm64
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: mac-builds
-          path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/latest-mac.yml
-            dist/*.blockmap
-          retention-days: 1
-
-  build-windows:
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout private repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PRIVATE_REPO }}
-          token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: ${{ inputs.version }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: Get pnpm store directory
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-pnpm-store-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build Windows
-        run: pnpm build:win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-builds
-          path: |
-            dist/*.exe
-            dist/latest.yml
-            dist/*.blockmap
-          retention-days: 1
-
-  build-linux:
+  validate-inputs:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
-      - name: Checkout private repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PRIVATE_REPO }}
-          token: ${{ secrets.PRIVATE_REPO_PAT }}
-          ref: ${{ inputs.version }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: Get pnpm store directory
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-pnpm-store-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build Linux
-        run: pnpm build:linux
+      - uses: actions/checkout@v4
+      - name: Validate manual dispatch inputs
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 scripts/validate_release_dispatch.py
 
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-builds
-          path: |
-            dist/*.AppImage
-            dist/*.deb
-            dist/*.snap
-            dist/latest-linux.yml
-            dist/*.blockmap
-          retention-days: 1
-
-  release:
-    needs: [build-mac, build-windows, build-linux]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: List artifacts
-        run: find artifacts -type f
-
-      - name: Upload to S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
-          S3_BUCKET: 2someone-web-static
-          S3_PATH: release/multipost-desktop
-          VERSION: ${{ inputs.version }}
-        run: |
-          S3_ENDPOINT="https://s3.bitiful.net"
-          S3_OPTS="--endpoint-url $S3_ENDPOINT --acl public-read --no-verify-ssl"
-
-          # Upload versioned files + yml manifests + blockmaps
-          find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.snap" -o -name "latest*.yml" -o -name "*.blockmap" \) | while read file; do
-            filename=$(basename "$file")
-            echo "Uploading $filename..."
-            aws s3 cp "$file" "s3://$S3_BUCKET/$S3_PATH/$filename" $S3_OPTS
-          done
-
-          # Create latest alias files (fixed download links)
-          echo "Creating latest alias files..."
-
-          resolve_mac_artifact() {
-            local pattern="$1" exclude="${2:-}"
-            local map count
-            if [ -n "$exclude" ]; then
-              map=$(find artifacts -name "$pattern" ! -name "$exclude")
-            else
-              map=$(find artifacts -name "$pattern")
-            fi
-            count=$(printf '%s\n' "$map" | sed '/^$/d' | wc -l | tr -d ' ')
-            if [ "$count" -ne 1 ]; then
-              echo "::error::Expected exactly one match for pattern=$pattern${exclude:+, exclude=$exclude}, got $count" >&2
-              exit 1
-            fi
-            printf '%s' "$map"
-          }
-
-          MAC_ARM_DMG=$(resolve_mac_artifact "*arm64*.dmg")
-          aws s3 cp "$MAC_ARM_DMG" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.dmg" $S3_OPTS
-
-          MAC_ARM_ZIP=$(resolve_mac_artifact "*arm64-mac.zip")
-          aws s3 cp "$MAC_ARM_ZIP" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-latest.zip" $S3_OPTS
-
-          MAC_X64_DMG=$(resolve_mac_artifact "*x64*.dmg")
-          aws s3 cp "$MAC_X64_DMG" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-x64-latest.dmg" $S3_OPTS
-
-          MAC_X64_ZIP=$(resolve_mac_artifact "*-mac.zip" "*arm64-mac.zip")
-          aws s3 cp "$MAC_X64_ZIP" "s3://$S3_BUCKET/$S3_PATH/MultiPost-mac-x64-latest.zip" $S3_OPTS
-
-          WIN_EXE=$(find artifacts -name "*.exe" | head -1)
-          [ -n "$WIN_EXE" ] && aws s3 cp "$WIN_EXE" "s3://$S3_BUCKET/$S3_PATH/MultiPost-Setup-latest.exe" $S3_OPTS
-
-          LINUX_APPIMAGE=$(find artifacts -name "*.AppImage" | head -1)
-          [ -n "$LINUX_APPIMAGE" ] && aws s3 cp "$LINUX_APPIMAGE" "s3://$S3_BUCKET/$S3_PATH/MultiPost-latest.AppImage" $S3_OPTS
-
-          LINUX_DEB=$(find artifacts -name "*.deb" | head -1)
-          [ -n "$LINUX_DEB" ] && aws s3 cp "$LINUX_DEB" "s3://$S3_BUCKET/$S3_PATH/MultiPost-latest.deb" $S3_OPTS
-
-      - name: Cleanup old versions on S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
-          S3_BUCKET: 2someone-web-static
-          S3_PATH: release/multipost-desktop
-          VERSION: ${{ inputs.version }}
-        run: |
-          S3_ENDPOINT="https://s3.bitiful.net"
-          S3_OPTS="--endpoint-url $S3_ENDPOINT --no-verify-ssl"
-          VER="${VERSION#v}"
-
-          aws s3 ls "s3://$S3_BUCKET/$S3_PATH/" $S3_OPTS 2>/dev/null \
-            | sed 's/^[0-9-]* [0-9:]* *[0-9]* //' \
-            | grep -v '^$' > /tmp/s3_all.txt
-
-          echo "Total files on S3: $(wc -l < /tmp/s3_all.txt)"
-          echo "Current version: ${VER}"
-
-          > /tmp/s3_delete.txt
-          while IFS= read -r fname; do
-            [ -z "$fname" ] && continue
-            keep=false
-            case "$fname" in *"${VER}"*) keep=true ;; esac
-            case "$fname" in
-              latest-mac.yml|latest.yml|latest-linux.yml) keep=true ;;
-              MultiPost-mac-latest.*) keep=true ;;
-              MultiPost-mac-x64-latest.*) keep=true ;;
-              MultiPost-Setup-latest.*) keep=true ;;
-              MultiPost-latest.*) keep=true ;;
-            esac
-            [ "$keep" = "false" ] && echo "$fname" >> /tmp/s3_delete.txt
-          done < /tmp/s3_all.txt
-
-          if [ ! -s /tmp/s3_delete.txt ]; then
-            echo "Nothing to delete."
-            exit 0
-          fi
-
-          echo "=== Deleting $(wc -l < /tmp/s3_delete.txt) old files ==="
-          while IFS= read -r fname; do
-            [ -z "$fname" ] && continue
-            echo "  rm: $fname"
-            aws s3 rm "s3://$S3_BUCKET/$S3_PATH/$fname" $S3_OPTS 2>/dev/null
-          done < /tmp/s3_delete.txt
-          echo "Cleanup complete"
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.version }}
-          name: MultiPost Desktop ${{ inputs.version }}
-          draft: false
-          prerelease: ${{ inputs.prerelease }}
-          generate_release_notes: true
-          files: |
-            artifacts/mac-builds/*.dmg
-            artifacts/mac-builds/*.zip
-            artifacts/windows-builds/*.exe
-            artifacts/linux-builds/*.AppImage
-            artifacts/linux-builds/*.deb
-            artifacts/linux-builds/*.snap
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  release-build:
+    needs: validate-inputs
+    uses: ./.github/workflows/release-desktop-build.yml
+    with:
+      channel: ${{ inputs.channel }}
+      version: ${{ inputs.version }}
+      source_sha: ${{ inputs.source_sha }}
+    secrets: inherit

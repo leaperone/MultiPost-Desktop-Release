@@ -1,0 +1,430 @@
+name: Desktop Release Build (core)
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: release or nightly
+        required: true
+        type: string
+      version:
+        description: GitHub release tag (vX.Y.Z or nightly suffix)
+        required: true
+        type: string
+      source_sha:
+        description: Full 40-char source monorepo commit SHA
+        required: true
+        type: string
+
+concurrency:
+  group: multipost-desktop-${{ inputs.channel }}
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: leaperone/MultiPost
+  NODE_VERSION: "20"
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+  RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+  MULTIPOST_RELEASE_CHANNEL: ${{ inputs.channel }}
+
+permissions:
+  contents: write
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.meta.outputs.package_version }}
+      source_ref: ${{ steps.meta.outputs.source_ref }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      make_latest: ${{ steps.meta.outputs.make_latest }}
+      s3_path: ${{ steps.meta.outputs.s3_path }}
+      cdn_base: ${{ steps.meta.outputs.cdn_base }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate channel, version, and source SHA
+        id: meta
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -eo pipefail
+          python3 scripts/validate_release_dispatch.py | tee /tmp/release_meta.txt
+          # shellcheck disable=SC1091
+          source /tmp/release_meta.txt
+          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+          if [ "$channel" = "nightly" ]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+            echo "s3_path=release/multipost-desktop-nightly" >> "$GITHUB_OUTPUT"
+            echo "cdn_base=https://static.2some.ren/release/multipost-desktop-nightly" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+            echo "s3_path=release/multipost-desktop" >> "$GITHUB_OUTPUT"
+            echo "cdn_base=https://static.2some.ren/release/multipost-desktop" >> "$GITHUB_OUTPUT"
+          fi
+
+  verify-source:
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged monorepo source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ needs.validate-inputs.outputs.source_ref }}
+          submodules: recursive
+
+      - name: Verify source SHA and package.json version
+        env:
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_PACKAGE_VERSION: ${{ needs.validate-inputs.outputs.package_version }}
+        run: |
+          set -eo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$RELEASE_SOURCE_SHA" ]; then
+            echo "::error::checkout SHA $actual_sha != expected $RELEASE_SOURCE_SHA"
+            exit 1
+          fi
+          pkg_version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [ "$pkg_version" != "$RELEASE_PACKAGE_VERSION" ]; then
+            echo "::error::apps/desktop/package.json version $pkg_version != $RELEASE_PACKAGE_VERSION"
+            exit 1
+          fi
+          echo "Source tag verified."
+
+  create-release:
+    needs: [validate-inputs, verify-source]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Refuse reusing an existing version
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag: ${{ toJSON(inputs.version) }} });
+              core.setFailed('Version already exists; use a new nightly sequence');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+      - name: Create draft GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: MultiPost Desktop ${{ inputs.version }} (${{ inputs.channel }})
+          body: |
+            Channel: ${{ inputs.channel }}
+            Source ref: ${{ needs.validate-inputs.outputs.source_ref }}
+            Source SHA: ${{ inputs.source_sha }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Run attempt: ${{ github.run_attempt }}
+          draft: true
+          prerelease: ${{ needs.validate-inputs.outputs.is_prerelease == 'true' }}
+          make_latest: ${{ needs.validate-inputs.outputs.make_latest == 'true' }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-mac:
+    needs: [validate-inputs, create-release]
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ needs.validate-inputs.outputs.source_ref }}
+          submodules: recursive
+
+      - name: Verify immutable checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build, sign, notarize and publish macOS
+        run: pnpm build:mac --x64 --arm64 --publish always
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MULTIPOST_RELEASE_CHANNEL: ${{ inputs.channel }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify signed and notarized macOS applications
+        env:
+          PACKAGE_VERSION: ${{ needs.validate-inputs.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          for app_path in apps/desktop/dist/mac/MultiPost.app apps/desktop/dist/mac-arm64/MultiPost.app; do
+            test -d "$app_path"
+            test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app_path/Contents/Info.plist")" = "$PACKAGE_VERSION"
+            codesign --verify --deep --strict "$app_path"
+            xcrun stapler validate "$app_path"
+            lipo -archs "$app_path/Contents/MacOS/MultiPost"
+          done
+          test "$(lipo -archs apps/desktop/dist/mac/MultiPost.app/Contents/MacOS/MultiPost)" = "x86_64"
+          test "$(lipo -archs apps/desktop/dist/mac-arm64/MultiPost.app/Contents/MacOS/MultiPost)" = "arm64"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-builds
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/latest*.yml
+            apps/desktop/dist/nightly*.yml
+            apps/desktop/dist/*.blockmap
+          retention-days: 1
+
+  build-windows:
+    needs: [validate-inputs, create-release]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ needs.validate-inputs.outputs.source_ref }}
+          submodules: recursive
+
+      - name: Verify immutable checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build and publish Windows
+        run: pnpm build:win --publish always
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MULTIPOST_RELEASE_CHANNEL: ${{ inputs.channel }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-builds
+          path: |
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/latest*.yml
+            apps/desktop/dist/nightly*.yml
+            apps/desktop/dist/*.blockmap
+          retention-days: 1
+
+  build-linux:
+    needs: [validate-inputs, create-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ needs.validate-inputs.outputs.source_ref }}
+          submodules: recursive
+
+      - name: Verify immutable checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build and publish Linux
+        run: pnpm build:linux --publish onTagOrDraft
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MULTIPOST_RELEASE_CHANNEL: ${{ inputs.channel }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-builds
+          path: |
+            apps/desktop/dist/*.AppImage
+            apps/desktop/dist/*.deb
+            apps/desktop/dist/*.snap
+            apps/desktop/dist/latest*.yml
+            apps/desktop/dist/nightly*.yml
+            apps/desktop/dist/*.blockmap
+          retention-days: 1
+
+  upload-to-s3:
+    needs: [validate-inputs, build-mac, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Validate manifests and artifacts
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_ARTIFACTS_DIR: artifacts
+        run: python3 scripts/validate_release_artifacts.py
+
+      - name: Guard against older channel promotion
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
+          S3_BUCKET: 2someone-web-static
+          S3_PATH: ${{ needs.validate-inputs.outputs.s3_path }}
+        run: |
+          set -eo pipefail
+          S3_ENDPOINT="https://s3.bitiful.net"
+          if [ "${{ inputs.channel }}" = "nightly" ]; then
+            manifest_key="nightly.yml"
+          else
+            manifest_key="latest.yml"
+          fi
+          export S3_ENDPOINT S3_PATH
+          python3 scripts/check_s3_promotion.py
+
+      - name: Upload to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
+          S3_BUCKET: 2someone-web-static
+          S3_PATH: ${{ needs.validate-inputs.outputs.s3_path }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_ARTIFACTS_DIR: artifacts
+        run: |
+          set -eo pipefail
+          S3_ENDPOINT="https://s3.bitiful.net"
+          export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY S3_BUCKET S3_PATH S3_ENDPOINT
+          python3 scripts/plan_s3_upload.py > /tmp/uploads.txt
+          echo "=== Uploading $(wc -l < /tmp/uploads.txt) objects (parallel, 6) ==="
+          bash scripts/upload_in_order.sh /tmp/uploads.txt
+
+  refresh-cdn:
+    needs: [validate-inputs, upload-to-s3]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refresh CDN cache for channel prefix
+        env:
+          BITIFUL_API_TOKEN: ${{ secrets.BITIFUL_API_TOKEN }}
+          CDN_BASE: ${{ needs.validate-inputs.outputs.cdn_base }}
+        run: |
+          set -eo pipefail
+          if [ -z "$BITIFUL_API_TOKEN" ]; then
+            echo "::error::BITIFUL_API_TOKEN secret is not set"
+            exit 1
+          fi
+          echo "Purging CDN cache for ${CDN_BASE}/ ..."
+          http=$(curl -s -o /tmp/refresh_resp.txt -w '%{http_code}' \
+            -X POST "https://api.bitiful.com/cdn/cache/refresh" \
+            -H "Authorization: $BITIFUL_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"type\":\"directory\",\"url_list\":[\"${CDN_BASE}/\"]}")
+          echo "Refresh API HTTP $http: $(cat /tmp/refresh_resp.txt)"
+          [ "$http" = "200" ] || { echo "::error::CDN cache refresh failed"; exit 1; }
+          if [ "$RELEASE_CHANNEL" = "nightly" ]; then prefix=nightly; else prefix=latest; fi
+          for manifest in "$prefix.yml" "$prefix-mac.yml" "$prefix-linux.yml"; do
+            visible=false
+            for attempt in $(seq 1 20); do
+              got=$(curl --fail --silent --show-error "$CDN_BASE/$manifest" | awk '/^version:/ {print $2}' || true)
+              if [ "$got" = "${RELEASE_VERSION#v}" ]; then visible=true; break; fi
+              sleep 15
+            done
+            [ "$visible" = true ] || { echo "::error::$manifest did not expose expected version"; exit 1; }
+          done
+
+  publish-release:
+    needs: [validate-inputs, upload-to-s3, refresh-cdn]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = ${{ toJSON(inputs.version) }};
+            const makeLatest = ${{ needs.validate-inputs.outputs.make_latest == 'true' }};
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            const draftRelease = releases.find(r => r.tag_name === version && r.draft);
+            if (!draftRelease) {
+              core.setFailed('No draft release found to publish');
+              return;
+            }
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: draftRelease.id,
+              draft: false,
+              make_latest: makeLatest ? 'true' : 'false',
+            });
