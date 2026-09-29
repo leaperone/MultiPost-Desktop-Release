@@ -1,85 +1,100 @@
 name: Sync Release to S3
 
-# Manual recovery tool: re-mirror an already-built GitHub Release's assets to
-# the S4 CDN in parallel, without rebuilding. Use when build-on-tag's
-# upload-to-s3 step was cancelled/timed out and left S4 files missing or stale.
+# Manual recovery: re-mirror an existing GitHub Release to the channel-scoped S4
+# prefix without rebuilding. Refuses cross-channel promotion or stale versions.
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Release tag to sync (e.g. v0.3.0)'
+      channel:
+        description: release or nightly
         required: true
+        type: choice
+        options:
+          - nightly
+          - release
+        default: nightly
+      version:
+        description: GitHub release tag to sync
+        required: true
+        type: string
+      source_sha:
+        description: Full 40-char source SHA (must appear in release notes)
+        required: true
+        type: string
+
+concurrency:
+  group: multipost-desktop-${{ inputs.channel }}
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate channel, version, SHA, and GitHub release flags
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/validate_release_dispatch.py
+          python3 scripts/validate_github_release_channel.py
+
       - name: Download release assets from GitHub
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          set -eo pipefail
           mkdir -p artifacts
-          gh release download "${{ github.event.inputs.version }}" \
-            -R ${{ github.repository }} -D artifacts --clobber
-          echo "=== downloaded ==="
-          ls -la artifacts
+          gh release download "$RELEASE_VERSION" \
+            -R "$GITHUB_REPOSITORY" -D artifacts --clobber
+          find artifacts -type f
+
+      - name: Validate complete manifests and artifact digests
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_ARTIFACTS_DIR: artifacts
+        run: python3 scripts/validate_release_artifacts.py
+
+      - name: Guard against older channel promotion
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
+          S3_BUCKET: 2someone-web-static
+        run: |
+          set -eo pipefail
+          if [ "${{ inputs.channel }}" = "nightly" ]; then
+            S3_PATH="release/multipost-desktop-nightly"
+          else
+            S3_PATH="release/multipost-desktop"
+          fi
+          S3_ENDPOINT="https://s3.bitiful.net"
+          export S3_ENDPOINT S3_PATH
+          python3 scripts/check_s3_promotion.py --allow-same-version
 
       - name: Upload to S3 (parallel)
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
           S3_BUCKET: 2someone-web-static
-          S3_PATH: release/multipost-desktop
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_ARTIFACTS_DIR: artifacts
         run: |
+          set -eo pipefail
+          if [ "${{ inputs.channel }}" = "nightly" ]; then
+            export S3_PATH="release/multipost-desktop-nightly"
+          else
+            export S3_PATH="release/multipost-desktop"
+          fi
           S3_ENDPOINT="https://s3.bitiful.net"
           export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY S3_BUCKET S3_PATH S3_ENDPOINT
-
-          # Build the upload manifest as "<src-path>|<dest-key>" lines.
-          # Versioned files keep their basename; the fixed "*-latest.*" download
-          # aliases point at the matching artifact.
-          {
-            find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.snap" -o -name "latest*.yml" -o -name "*.blockmap" \) \
-              | while read -r f; do echo "$f|$(basename "$f")"; done
-
-            append_mac_alias() {
-              local pattern="$1" dest="$2" exclude="${3:-}"
-              local map
-              if [ -n "$exclude" ]; then
-                map=$(find artifacts -name "$pattern" ! -name "$exclude")
-              else
-                map=$(find artifacts -name "$pattern")
-              fi
-              local count
-              count=$(printf '%s\n' "$map" | sed '/^$/d' | wc -l | tr -d ' ')
-              if [ "$count" -ne 1 ]; then
-                echo "::error::Expected exactly one match for $dest (pattern=$pattern${exclude:+, exclude=$exclude}), got $count" >&2
-                exit 1
-              fi
-              echo "$map|$dest"
-            }
-
-            append_mac_alias "*arm64*.dmg" "MultiPost-mac-latest.dmg"
-            append_mac_alias "*arm64-mac.zip" "MultiPost-mac-latest.zip"
-            append_mac_alias "*x64*.dmg" "MultiPost-mac-x64-latest.dmg"
-            append_mac_alias "*-mac.zip" "MultiPost-mac-x64-latest.zip" "*arm64-mac.zip"
-
-            for spec in "*.exe|MultiPost-Setup-latest.exe" "*.AppImage|MultiPost-latest.AppImage" "*.deb|MultiPost-latest.deb"; do
-              src=$(find artifacts -name "${spec%%|*}" | head -1)
-              [ -n "$src" ] && echo "$src|${spec##*|}"
-            done
-          } > /tmp/uploads.txt
-
-          echo "=== Uploading $(wc -l < /tmp/uploads.txt) objects to S3 (parallel, 6 at a time) ==="
-          cat /tmp/uploads.txt
-
-          # Parallel upload. xargs exits non-zero if any cp fails, which fails the
-          # step under the default `set -eo pipefail`.
-          xargs -a /tmp/uploads.txt -P 6 -d '\n' -I {} bash -c '
-            spec="$1"; src="${spec%%|*}"; dst="${spec##*|}"
-            echo "Uploading $dst ..."
-            aws s3 cp "$src" "s3://$S3_BUCKET/$S3_PATH/$dst" \
-              --endpoint-url "$S3_ENDPOINT" --acl public-read --no-verify-ssl
-          ' _ {}
-
-          echo "All uploads complete."
+          python3 scripts/plan_s3_upload.py > /tmp/uploads.txt
+          bash scripts/upload_in_order.sh /tmp/uploads.txt
