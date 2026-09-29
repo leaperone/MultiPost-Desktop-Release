@@ -38,6 +38,7 @@ jobs:
       - run: pnpm exec stylelint apps/web/src/styles/globals.css apps/desktop/src/renderer/src/styles/global.css packages/theme/src/theme.css
       - run: pnpm exec tsc --noEmit -p apps/web/tsconfig.json
       - run: pnpm --filter multipost-desktop typecheck
+      - run: node packages/injectors/scripts/check-extension-drift.mjs
       - run: pnpm --filter multipost-desktop typecheck:windows-tests
       - run: pnpm --filter multipost-web test:article-draft
       - run: pnpm --filter multipost-web test:agent-composer
