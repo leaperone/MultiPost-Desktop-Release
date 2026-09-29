@@ -29,12 +29,7 @@ jobs:
             echo "::error::release-build payload requires channel, version, and source_sha"
             exit 1
           fi
-          python3 scripts/validate_release_dispatch.py | tee /tmp/payload.txt
-          # shellcheck disable=SC1091
-          source /tmp/payload.txt
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          python3 scripts/validate_release_dispatch.py >> "$GITHUB_OUTPUT"
 
   release-build:
     needs: validate-payload

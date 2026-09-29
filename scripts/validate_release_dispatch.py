@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from release_lib.constants import S3_PREFIX_BY_CHANNEL, CDN_BASE_BY_CHANNEL
 from release_lib.dispatch import validate_dispatch_inputs  # noqa: E402
 
 
@@ -28,6 +29,12 @@ def main() -> int:
     except ValueError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
+    result.update({
+        'is_prerelease': 'true' if result['channel'] == 'nightly' else 'false',
+        'make_latest': 'false' if result['channel'] == 'nightly' else 'true',
+        's3_path': S3_PREFIX_BY_CHANNEL[result['channel']],
+        'cdn_base': CDN_BASE_BY_CHANNEL[result['channel']],
+    })
     for key, value in result.items():
         print(f"{key}={value}")
     return 0

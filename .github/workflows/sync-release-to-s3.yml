@@ -73,10 +73,8 @@ jobs:
           set -eo pipefail
           if [ "${{ inputs.channel }}" = "nightly" ]; then
             S3_PATH="release/multipost-desktop-nightly"
-            manifest_key="nightly.yml"
           else
             S3_PATH="release/multipost-desktop"
-            manifest_key="latest.yml"
           fi
           S3_ENDPOINT="https://s3.bitiful.net"
           export S3_ENDPOINT S3_PATH
