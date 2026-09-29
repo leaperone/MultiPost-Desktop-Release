@@ -93,11 +93,12 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            try {
-              await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag: ${{ toJSON(inputs.version) }} });
-              core.setFailed('Version already exists; use a new nightly sequence');
-            } catch (error) {
-              if (error.status !== 404) throw error;
+            const version = ${{ toJSON(inputs.version) }};
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
+            });
+            if (releases.some(release => release.tag_name === version)) {
+              core.setFailed('Version already exists, including a draft; use a new nightly sequence');
             }
 
       - name: Create draft GitHub release
