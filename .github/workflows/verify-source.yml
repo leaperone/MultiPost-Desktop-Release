@@ -46,5 +46,8 @@ jobs:
       - run: pnpm --filter multipost-desktop test:overlay-toasts
       - run: pnpm --filter multipost-desktop test:local-file-url
       - run: pnpm --filter multipost-desktop test:publish-selection
+      - run: pnpm --filter multipost-desktop test:publish-lifecycle
+      - run: pnpm --filter multipost-desktop test:publish-store-renderer
+      - run: pnpm extension:test:hybrid
       - run: pnpm --filter multipost-desktop test:update-channel
       - run: pnpm --filter multipost-desktop test:release-contract
