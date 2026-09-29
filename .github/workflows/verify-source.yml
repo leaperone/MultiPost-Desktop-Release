@@ -1,0 +1,49 @@
+name: Verify Desktop source
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact MultiPost source SHA to verify before release
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate immutable SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: test "$(printf '%s' "$SOURCE_SHA" | tr -d '0-9a-f')" = "" && test "${#SOURCE_SHA}" = 40
+      - uses: actions/checkout@v4
+        with:
+          repository: leaperone/MultiPost
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ inputs.source_sha }}
+      - name: Verify checkout
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm --filter multipost-web exec fumadocs-mdx
+      - run: pnpm --filter multipost-web generate-routes
+      - run: node scripts/check-ui-system.mjs
+      - run: pnpm exec stylelint apps/web/src/styles/globals.css apps/desktop/src/renderer/src/styles/global.css packages/theme/src/theme.css
+      - run: pnpm exec tsc --noEmit -p apps/web/tsconfig.json
+      - run: pnpm --filter multipost-desktop typecheck
+      - run: pnpm --filter multipost-desktop typecheck:windows-tests
+      - run: pnpm --filter multipost-web test:article-draft
+      - run: pnpm --filter multipost-web test:agent-composer
+      - run: pnpm --filter multipost-web test:desktop-auth
+      - run: pnpm --filter multipost-desktop test:overlay-toasts
+      - run: pnpm --filter multipost-desktop test:local-file-url
+      - run: pnpm --filter multipost-desktop test:publish-selection
+      - run: pnpm --filter multipost-desktop test:update-channel
+      - run: pnpm --filter multipost-desktop test:release-contract
