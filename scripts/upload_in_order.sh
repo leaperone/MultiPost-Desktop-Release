@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${RELEASE_CHANNEL:-}" != release ]; then
+  echo 'S3 uploads require the release channel; Nightly is GitHub-only' >&2
+  exit 2
+fi
 manifest=$1
 concurrency=${UPLOAD_CONCURRENCY:-2}
 retry_delay=${UPLOAD_RETRY_DELAY:-5}
@@ -14,6 +18,7 @@ trap 'rm -rf "$work"' EXIT
 : > "$work/manifests"
 while IFS='|' read -r src dst; do
   case "$dst" in
+    *nightly*) echo 'Nightly assets cannot be uploaded to S3' >&2; exit 2 ;;
     latest*.yml|nightly*.yml) phase=manifests ;;
     MultiPost-*-latest.*|MultiPost-*-nightly.*|MultiPost-latest.*|MultiPost-nightly.*) phase=aliases ;;
     *) phase=artifacts ;;

@@ -90,6 +90,14 @@ def main() -> int:
         )
         return 1
 
+    expected_channel_line = f"Channel: {channel}"
+    if expected_channel_line not in body:
+        print(
+            f"::error::release body must contain {expected_channel_line!r}",
+            file=sys.stderr,
+        )
+        return 1
+
     print("github release channel validation ok")
     return 0
 

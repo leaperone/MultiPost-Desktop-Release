@@ -4,7 +4,7 @@ This is the release repository for [MultiPost Desktop](https://github.com/leaper
 
 ## Download
 
-Visit the [Releases](https://github.com/leaperone/MultiPost-Desktop-Release/releases) page to download the latest version.
+Visit the [Releases](https://github.com/leaperone/MultiPost-Desktop-Release/releases) page to download the latest version. **Nightly** builds are published on GitHub prereleases only (no S3/CDN mirror); stable **release** builds use GitHub plus the existing CDN download path.
 
 ### Available Platforms
 

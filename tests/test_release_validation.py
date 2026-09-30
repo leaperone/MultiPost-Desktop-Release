@@ -26,6 +26,52 @@ class DispatchValidationTests(unittest.TestCase):
         )
         self.assertEqual(out["source_ref"], "refs/tags/desktop-v0.5.1-nightly.20260929.1")
 
+    def test_nightly_has_no_s3_or_cdn_promotion_outputs(self) -> None:
+        import subprocess
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/validate_release_dispatch.py"),
+                "--channel",
+                "nightly",
+                "--version",
+                "v0.5.1-nightly.20260929.1",
+                "--source-sha",
+                "f" * 40,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        lines = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+        self.assertEqual(lines.get("s3_path"), "")
+        self.assertEqual(lines.get("cdn_base"), "")
+
+    def test_release_dispatch_exports_s3_outputs(self) -> None:
+        import subprocess
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/validate_release_dispatch.py"),
+                "--channel",
+                "release",
+                "--version",
+                "v0.5.1",
+                "--source-sha",
+                "a" * 40,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        lines = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+        self.assertEqual(lines.get("s3_path"), "release/multipost-desktop")
+        self.assertIn("static.2some.ren", lines.get("cdn_base", ""))
+
     def test_release_rejects_nightly_suffix(self) -> None:
         with self.assertRaises(ValueError):
             validate_dispatch_inputs("release", "v0.5.1-nightly.20260929.1", "a" * 40)
@@ -57,16 +103,21 @@ class SemverTests(unittest.TestCase):
 
 
 class UploadPlanTests(unittest.TestCase):
-    def test_nightly_alias_paths(self) -> None:
-        dests = {d for _, d, _ in alias_destinations("nightly")}
-        self.assertIn("MultiPost-Setup-nightly.exe", dests)
-        self.assertNotIn("MultiPost-Setup-latest.exe", dests)
+    def test_nightly_rejects_s3_aliases(self) -> None:
+        with self.assertRaisesRegex(ValueError, "GitHub-only"):
+            alias_destinations("nightly")
 
-    def test_s3_prefix_isolation(self) -> None:
-        self.assertNotEqual(
-            S3_PREFIX_BY_CHANNEL["release"],
-            S3_PREFIX_BY_CHANNEL["nightly"],
-        )
+    def test_release_s3_prefix_only_for_stable(self) -> None:
+        self.assertIn("release", S3_PREFIX_BY_CHANNEL)
+        self.assertNotIn("nightly", S3_PREFIX_BY_CHANNEL)
+
+    def test_nightly_upload_plan_fails_before_network(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(ValueError, "GitHub-only"):
+                build_upload_plan_lines(root, "nightly")
 
 class UploadPlanIntegrationTests(unittest.TestCase):
     def test_build_plan_lines(self) -> None:
@@ -83,10 +134,10 @@ class UploadPlanIntegrationTests(unittest.TestCase):
             (sub / "MultiPost-1.0.0-setup.exe").write_bytes(b"x")
             (sub / "MultiPost-1.0.0.AppImage").write_bytes(b"x")
             (sub / "multipost_1.0.0_amd64.deb").write_bytes(b"x")
-            (sub / "nightly-mac.yml").write_text("version: 1.0.0\n", encoding="utf-8")
-            lines = build_upload_plan_lines(root, "nightly")
+            (sub / "latest-mac.yml").write_text("version: 1.0.0\n", encoding="utf-8")
+            lines = build_upload_plan_lines(root, "release")
             dests = {line.split("|", 1)[1] for line in lines}
-            self.assertIn("MultiPost-mac-nightly.dmg", dests)
+            self.assertIn("MultiPost-mac-latest.dmg", dests)
 
 
 if __name__ == "__main__":

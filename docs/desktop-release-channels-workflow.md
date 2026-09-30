@@ -12,14 +12,16 @@ This release repository delegates all desktop builds to `.github/workflows/relea
 
 Checkout uses `refs/tags/desktop-<version>` on `leaperone/MultiPost`. CI sets `MULTIPOST_RELEASE_CHANNEL` for electron-builder (implemented in the source monorepo).
 
-## S3 / CDN
+## Distribution (permanent)
 
-| Channel | S3 prefix | Windows manifest |
+| Channel | GitHub Release | S3 / CDN |
 | --- | --- | --- |
-| release | `release/multipost-desktop` | `latest.yml` |
-| nightly | `release/multipost-desktop-nightly` | `nightly.yml` |
+| `release` (stable) | Published after S3 upload + CDN purge | `release/multipost-desktop` on Bitiful; manifests `latest*.yml` |
+| `nightly` | **GitHub-only** — downloads and updater manifests live on the prerelease | **None** — no S3 upload, no CDN purge, manual sync workflow refuses Nightly |
 
-Nightly stable download aliases use `*-nightly.*` basenames. Broad S3 cleanup was removed; promotion is guarded by semver checks.
+Nightly promotion validates workflow artifacts (manifests, digests, version/SHA) and proves GitHub release assets match those files by size and SHA256 before the draft is published. Stable promotion still requires successful S3 upload and CDN visibility checks.
+
+Each release attempt uses a new immutable `vX.Y.Z-nightly.YYYYMMDD.N` tag; CI refuses reusing an existing tag.
 
 ## Local validation
 
@@ -27,4 +29,5 @@ Nightly stable download aliases use `*-nightly.*` basenames. Broad S3 cleanup wa
 python3 -m unittest discover -s tests -p 'test_*.py'
 python3 scripts/validate_release_dispatch.py --channel nightly \
   --version v0.5.1-nightly.20260929.1 --source-sha "$(printf '%040d' 0)"
+python3 scripts/plan_s3_upload.py --channel nightly  # must fail before any network
 ```

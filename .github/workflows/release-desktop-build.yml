@@ -301,7 +301,41 @@ jobs:
             apps/desktop/dist/*.blockmap
           retention-days: 1
 
+  validate-github-nightly:
+    if: inputs.channel == 'nightly'
+    needs: [validate-inputs, build-mac, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Validate built manifests and artifacts
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_ARTIFACTS_DIR: artifacts
+        run: python3 scripts/validate_release_artifacts.py
+
+      - name: Validate GitHub prerelease and assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_ARTIFACTS_DIR: artifacts
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_github_release_channel.py
+          python3 scripts/validate_github_release_assets.py
+
   upload-to-s3:
+    if: inputs.channel == 'release'
     needs: [validate-inputs, build-mac, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
@@ -350,6 +384,7 @@ jobs:
           bash scripts/upload_in_order.sh /tmp/uploads.txt
 
   refresh-cdn:
+    if: inputs.channel == 'release'
     needs: [validate-inputs, upload-to-s3]
     runs-on: ubuntu-latest
     steps:
@@ -371,7 +406,7 @@ jobs:
             -d "{\"type\":\"directory\",\"url_list\":[\"${CDN_BASE}/\"]}")
           echo "Refresh API HTTP $http: $(cat /tmp/refresh_resp.txt)"
           [ "$http" = "200" ] || { echo "::error::CDN cache refresh failed"; exit 1; }
-          if [ "$RELEASE_CHANNEL" = "nightly" ]; then prefix=nightly; else prefix=latest; fi
+          prefix=latest
           for manifest in "$prefix.yml" "$prefix-mac.yml" "$prefix-linux.yml"; do
             visible=false
             for attempt in $(seq 1 20); do
@@ -384,7 +419,11 @@ jobs:
           done
 
   publish-release:
-    needs: [validate-inputs, upload-to-s3, refresh-cdn]
+    if: >-
+      always() && !cancelled() && needs.validate-inputs.result == 'success' &&
+      ((inputs.channel == 'nightly' && needs.validate-github-nightly.result == 'success') ||
+       (inputs.channel == 'release' && needs.refresh-cdn.result == 'success'))
+    needs: [validate-inputs, validate-github-nightly, upload-to-s3, refresh-cdn]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -395,9 +434,10 @@ jobs:
           script: |
             const version = ${{ toJSON(inputs.version) }};
             const makeLatest = ${{ needs.validate-inputs.outputs.make_latest == 'true' }};
-            const { data: releases } = await github.rest.repos.listReleases({
+            const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
               repo: context.repo.repo,
+              per_page: 100,
             });
             const draftRelease = releases.find(r => r.tag_name === version && r.draft);
             if (!draftRelease) {
