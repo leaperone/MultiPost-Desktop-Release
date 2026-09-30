@@ -83,8 +83,15 @@ jobs:
           fi
           echo "Source tag verified."
 
+  verify-source-tests:
+    needs: verify-source
+    uses: ./.github/workflows/verify-source.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+    secrets: inherit
+
   create-release:
-    needs: [validate-inputs, verify-source]
+    needs: [validate-inputs, verify-source-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write
