@@ -306,7 +306,8 @@ jobs:
     needs: [validate-inputs, build-mac, build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # GitHub requires push access to read unpublished draft releases.
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
