@@ -77,8 +77,6 @@ jobs:
         env:
           RELEASE_CHANNEL: ${{ inputs.channel }}
           RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_CHANNEL: ${{ inputs.channel }}
-          RELEASE_VERSION: ${{ inputs.version }}
           AWS_ACCESS_KEY_ID: ${{ secrets.BITIFUL_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.BITIFUL_SECRET_ACCESS_KEY }}
           S3_BUCKET: 2someone-web-static
