@@ -69,7 +69,7 @@ def validate_asset_names(names: list[str], version: str, channel: str) -> None:
     binaries = [
         n
         for n in names
-        if n.endswith((".dmg", ".zip", ".exe", ".AppImage", ".deb"))
+        if n.endswith((".dmg", ".zip", ".exe", ".AppImage", ".deb", ".snap"))
     ]
     if not binaries or not all(pkg in name for name in binaries):
         raise ValueError("Nightly binary asset names must include the full version")

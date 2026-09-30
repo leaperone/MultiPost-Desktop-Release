@@ -289,6 +289,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MULTIPOST_RELEASE_CHANNEL: ${{ inputs.channel }}
 
+      - name: Upload Nightly Snap to GitHub
+        if: inputs.channel == 'nightly'
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$RELEASE_VERSION" dist/*.snap --repo "$GITHUB_REPOSITORY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-builds

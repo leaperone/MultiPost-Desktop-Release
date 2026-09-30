@@ -73,6 +73,18 @@ class GithubNightlyAssetTests(unittest.TestCase):
                     {"name": 'source.zip', "size": 1, "digest": digest},
                 ], local)
 
+    def test_built_snap_must_be_uploaded_to_github(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'multipost-desktop_0.5.1-nightly.20260930.1_amd64.snap'
+            path.write_bytes(b'snap package')
+            local = collect_local_release_files(Path(directory), 'nightly')
+            with self.assertRaisesRegex(ValueError, 'missing locally validated assets'):
+                validate_remote_assets_match_local([], local)
+            validate_remote_assets_match_local([{
+                'name': path.name, 'size': path.stat().st_size,
+                'digest': 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest(),
+            }], local)
+
     def test_cli_requires_local_artifacts_before_querying_github(self):
         result = subprocess.run([sys.executable, str(ROOT / 'scripts/validate_github_release_assets.py'),
             '--channel', 'nightly', '--version', 'v0.5.1-nightly.20260930.1',
