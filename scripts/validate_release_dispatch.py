@@ -32,8 +32,10 @@ def main() -> int:
     result.update({
         'is_prerelease': 'true' if result['channel'] == 'nightly' else 'false',
         'make_latest': 'false' if result['channel'] == 'nightly' else 'true',
-        's3_path': S3_PREFIX_BY_CHANNEL[result['channel']],
-        'cdn_base': CDN_BASE_BY_CHANNEL[result['channel']],
+        # Nightly is GitHub-only. Keep these outputs empty so an accidental
+        # future S3/CDN step fails closed instead of receiving a Nightly path.
+        's3_path': S3_PREFIX_BY_CHANNEL[result['channel']] if result['channel'] == 'release' else '',
+        'cdn_base': CDN_BASE_BY_CHANNEL[result['channel']] if result['channel'] == 'release' else '',
     })
     for key, value in result.items():
         print(f"{key}={value}")

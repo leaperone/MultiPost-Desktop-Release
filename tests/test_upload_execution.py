@@ -30,6 +30,12 @@ sys.exit(17 if failed else 0)
 '''
 
 class UploadExecutionTests(unittest.TestCase):
+    def test_nightly_upload_exits_before_reading_manifest_or_calling_aws(self):
+        result = subprocess.run(['bash', str(ROOT / 'scripts/upload_in_order.sh'), '/missing'],
+            env={**os.environ, 'RELEASE_CHANNEL': 'nightly'}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('GitHub-only', result.stderr)
+
     def run_upload(self, failure):
         with tempfile.TemporaryDirectory() as folder:
             temp = Path(folder)
@@ -37,11 +43,11 @@ class UploadExecutionTests(unittest.TestCase):
             fake.write_text(FAKE_AWS)
             fake.chmod(0o755)
             manifest = temp / 'uploads.txt'
-            manifest.write_text('one file.zip|artifact.zip\nother.zip|other.zip\nartifact.zip|MultiPost-mac-nightly.zip\nnightly-mac.yml|nightly-mac.yml\n')
+            manifest.write_text('one file.zip|artifact.zip\nother.zip|other.zip\nartifact.zip|MultiPost-mac-latest.zip\nlatest-mac.yml|latest-mac.yml\n')
             env = {**os.environ, 'PATH': f'{temp}{os.pathsep}{os.environ["PATH"]}',
                    'UPLOAD_TEST_STATE': str(temp / 'state.json'), 'UPLOAD_TEST_FAILURE': failure,
                    'UPLOAD_RETRY_DELAY': '0', 'UPLOAD_CONCURRENCY': '2',
-                   'S3_BUCKET': 'test', 'S3_PATH': 'nightly', 'S3_ENDPOINT': 'https://s3.invalid'}
+                   'RELEASE_CHANNEL': 'release', 'S3_BUCKET': 'test', 'S3_PATH': 'latest', 'S3_ENDPOINT': 'https://s3.invalid'}
             result = subprocess.run(['bash', str(ROOT / 'scripts/upload_in_order.sh'), str(manifest)],
                                     env=env, capture_output=True, text=True)
             return result, json.loads((temp / 'state.json').read_text())
@@ -54,17 +60,17 @@ class UploadExecutionTests(unittest.TestCase):
         self.assertEqual(state['retryMode'], 'adaptive')
         self.assertEqual(state['maxAttempts'], '8')
         events = state['events']
-        alias = events.index(['begin', 'MultiPost-mac-nightly.zip'])
+        alias = events.index(['begin', 'MultiPost-mac-latest.zip'])
         self.assertLess(events.index(['success', 'artifact.zip']), alias)
         self.assertLess(events.index(['success', 'other.zip']), alias)
-        self.assertLess(events.index(['success', 'MultiPost-mac-nightly.zip']), events.index(['begin', 'nightly-mac.yml']))
+        self.assertLess(events.index(['success', 'MultiPost-mac-latest.zip']), events.index(['begin', 'latest-mac.yml']))
 
     def test_permanent_failure_keeps_alias_and_manifest_unchanged(self):
         result, state = self.run_upload('always')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(state['attempts']['artifact.zip'], 3)
-        self.assertNotIn('MultiPost-mac-nightly.zip', state['attempts'])
-        self.assertNotIn('nightly-mac.yml', state['attempts'])
+        self.assertNotIn('MultiPost-mac-latest.zip', state['attempts'])
+        self.assertNotIn('latest-mac.yml', state['attempts'])
 
 if __name__ == '__main__':
     unittest.main()

@@ -2,9 +2,10 @@
 import argparse
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
-from release_lib.constants import MANIFEST_NAMES_BY_CHANNEL
+from release_lib.constants import MANIFEST_NAMES_BY_CHANNEL, require_s3_eligible_channel
 from release_lib.manifests import VERSION_LINE
 from release_lib.promotion import promotion_allowed
 
@@ -12,6 +13,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--allow-same-version', action='store_true')
 args = parser.parse_args()
 channel = os.environ['RELEASE_CHANNEL']
+try:
+    require_s3_eligible_channel(channel)
+except ValueError as exc:
+    print(f"::error::{exc}", file=sys.stderr)
+    raise SystemExit(1)
 version = os.environ['RELEASE_VERSION']
 manifest = MANIFEST_NAMES_BY_CHANNEL[channel][1]
 key = f"{os.environ['S3_PATH']}/{manifest}"

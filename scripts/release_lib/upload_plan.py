@@ -3,7 +3,7 @@ from __future__ import annotations
 import fnmatch
 from pathlib import Path
 
-from .constants import MANIFEST_NAMES_BY_CHANNEL, alias_destinations
+from .constants import MANIFEST_NAMES_BY_CHANNEL, alias_destinations, require_s3_eligible_channel
 
 ARTIFACT_GLOBS = (
     "*.dmg",
@@ -38,6 +38,7 @@ def _find_unique(root: Path, pattern: str, exclude: str | None = None) -> Path:
 
 def build_upload_plan_lines(artifacts_root: Path, channel: str) -> list[str]:
     """Return src|dest lines for S3 upload (dest is object basename)."""
+    require_s3_eligible_channel(channel)
     manifest_names = set(MANIFEST_NAMES_BY_CHANNEL[channel])
     lines: list[str] = []
     seen_dest: set[str] = set()

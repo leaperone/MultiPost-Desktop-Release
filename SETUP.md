@@ -150,3 +150,8 @@ echo "Release build triggered for $VERSION"
 - The PAT should have minimal required permissions
 - Rotate the PAT periodically
 - Never commit secrets to the repository
+
+
+## Nightly distribution
+
+Nightly installers and updater manifests are published only to GitHub prereleases. The Nightly build validates GitHub asset digests and publishes the draft without S3 upload or CDN refresh. S3 credentials and `sync-release-to-s3` apply only to stable releases; Nightly sync is rejected before any upload.
