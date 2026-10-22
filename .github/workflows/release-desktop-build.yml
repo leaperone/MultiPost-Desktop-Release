@@ -42,7 +42,7 @@ jobs:
       s3_path: ${{ steps.meta.outputs.s3_path }}
       cdn_base: ${{ steps.meta.outputs.cdn_base }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate channel, version, and source SHA
         id: meta
         env:
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout tagged monorepo source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
@@ -97,7 +97,7 @@ jobs:
       contents: write
     steps:
       - name: Refuse reusing an existing version
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const version = ${{ toJSON(inputs.version) }};
@@ -109,7 +109,7 @@ jobs:
             }
 
       - name: Create draft GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ inputs.version }}
           name: MultiPost Desktop ${{ inputs.version }} (${{ inputs.channel }})
@@ -133,7 +133,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
@@ -144,17 +144,17 @@ jobs:
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - name: Get pnpm store directory
         shell: bash
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -189,7 +189,7 @@ jobs:
           test "$(lipo -archs apps/desktop/dist/mac/MultiPost.app/Contents/MacOS/MultiPost)" = "x86_64"
           test "$(lipo -archs apps/desktop/dist/mac-arm64/MultiPost.app/Contents/MacOS/MultiPost)" = "arm64"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mac-builds
           path: |
@@ -207,7 +207,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
@@ -218,17 +218,17 @@ jobs:
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - name: Get pnpm store directory
         shell: bash
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -243,7 +243,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MULTIPOST_RELEASE_CHANNEL: ${{ inputs.channel }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-builds
           path: |
@@ -260,7 +260,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ${{ env.PRIVATE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_PAT }}
@@ -271,17 +271,17 @@ jobs:
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - name: Get pnpm store directory
         shell: bash
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -303,7 +303,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$RELEASE_VERSION" dist/*.snap --repo "$GITHUB_REPOSITORY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux-builds
           path: |
@@ -323,9 +323,9 @@ jobs:
       # GitHub requires push access to read unpublished draft releases.
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -354,9 +354,9 @@ jobs:
     needs: [validate-inputs, build-mac, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -444,7 +444,7 @@ jobs:
       contents: write
     steps:
       - name: Publish GitHub release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const version = ${{ toJSON(inputs.version) }};
